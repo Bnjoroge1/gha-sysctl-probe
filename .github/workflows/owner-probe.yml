@@ -1,0 +1,48 @@
+name: runner home ownership probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: probe ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04-arm, ubuntu-24.04]
+    steps:
+      - name: identity and image metadata
+        run: |
+          id
+          uname -m
+          head -3 /etc/os-release
+          echo "--- /etc/environment"
+          cat /etc/environment || true
+          echo "--- /imagegeneration"
+          ls -l /imagegeneration/ 2>&1
+          head -c 900 /imagegeneration/imagedata.json 2>&1 || true
+          echo "--- preloop bake manifest?"
+          ls -l /etc/preloop-bake.json 2>&1 || echo "none"
+      - name: find mismatched owners under the runner home
+        run: |
+          sudo -n find /home/runner /usr/local/rustup /usr/local/cargo -xdev \( ! -user 1001 -o ! -group 1001 \) -printf '%u:%g %m %TY-%Tm-%Td %y %p\n' 2>&1 | sort
+          echo "mismatch-count=$(sudo -n find /home/runner /usr/local/rustup /usr/local/cargo -xdev \( ! -user 1001 -o ! -group 1001 \) 2>/dev/null | wc -l)"
+          echo "total-entries=$(sudo -n find /home/runner -xdev 2>/dev/null | wc -l)"
+      - name: docker config entries
+        run: |
+          sudo -n stat -c '%n|uid=%u gid=%g|mode=%a|size=%s|mtime=%y' /home/runner/.docker /home/runner/.docker/config.json 2>&1
+          sudo -n ls -la /home/runner/.docker 2>&1
+          sudo -n head -c 200 /home/runner/.docker/config.json 2>&1
+      - name: users, groups and any uid 502
+        run: |
+          getent passwd runner
+          getent group docker
+          getent group 117 || echo "no group 117"
+          echo "uid-502 paths: $(sudo -n find / -xdev -uid 502 2>/dev/null | wc -l)"
+          sudo -n find / -xdev -uid 502 -printf '%u:%g %m %y %p\n' 2>/dev/null | head -20
+          echo "--- symlinks in the runner home and their owners"
+          sudo -n find /home/runner -xdev -type l -printf '%u:%g %m %p -> %l\n' 2>/dev/null | head -30
