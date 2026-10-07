@@ -1,0 +1,67 @@
+name: runner env probe
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: probe ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04]
+    steps:
+      - name: guest kernel and memory
+        run: |
+          uname -a
+          grep MemTotal /proc/meminfo
+          nproc
+          grep -E 'Image(Version|OS)' /etc/environment || true
+      - name: sysctl values
+        run: |
+          for k in vm.overcommit_memory vm.overcommit_ratio vm.max_map_count vm.mmap_rnd_bits vm.swappiness vm.dirty_ratio vm.dirty_background_ratio fs.inotify.max_user_watches fs.inotify.max_user_instances fs.inotify.max_queued_events net.core.somaxconn net.core.rmem_max net.core.wmem_max net.ipv4.tcp_max_syn_backlog net.ipv4.ip_local_port_range net.ipv4.tcp_tw_reuse kernel.pid_max kernel.threads-max; do
+            printf '%s = %s\n' "$k" "$(cat "/proc/sys/${k//./\/}" 2>/dev/null || echo MISSING)"
+          done
+          echo "THP enabled: $(cat /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null || echo MISSING)"
+          echo "THP defrag:  $(cat /sys/kernel/mm/transparent_hugepage/defrag 2>/dev/null || echo MISSING)"
+          echo "mptcp enabled: $(cat /proc/sys/net/mptcp/enabled 2>/dev/null || echo MISSING)"
+      - name: sysctl config files
+        run: |
+          echo '=== /etc/sysctl.conf'; cat /etc/sysctl.conf
+          echo '=== /etc/sysctl.d'; ls -la /etc/sysctl.d/
+          for f in /etc/sysctl.d/*; do echo "=== $f"; cat "$f"; done
+      - name: limits
+        run: |
+          echo '=== /etc/security/limits.conf (uncommented)'
+          grep -vE '^\s*(#|$)' /etc/security/limits.conf || true
+          echo '=== /etc/systemd/system.conf Limit lines'
+          grep -Ei '^DefaultLimit' /etc/systemd/system.conf || true
+          echo '=== pam_limits references'
+          grep -rn pam_limits /etc/pam.d/ || true
+          echo '=== ulimit -a (job shell)'
+          ulimit -a
+      - name: mptcp socket probe
+        run: |
+          python3 - <<'PY'
+          import socket
+          for proto, name in ((262, "IPPROTO_MPTCP"),):
+              try:
+                  s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, proto)
+                  s.bind(("127.0.0.1", 0))
+                  s.listen(1)
+                  s.close()
+                  print(f"{name} socket+bind+listen: OK")
+              except OSError as e:
+                  print(f"{name} socket: FAIL errno={e.errno} {e}")
+          PY
+      - name: cgroup and cpu
+        run: |
+          cat /sys/fs/cgroup/memory.max 2>/dev/null || true
+          cat /sys/fs/cgroup/cpu.max 2>/dev/null || true
+          cat /sys/fs/cgroup/pids.max 2>/dev/null || true
