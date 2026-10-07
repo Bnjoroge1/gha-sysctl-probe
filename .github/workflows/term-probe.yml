@@ -1,0 +1,35 @@
+name: term probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: term ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: term in the step shell
+        run: |
+          echo "step shell TERM=[${TERM-<unset>}]"
+          printenv TERM || echo "printenv TERM: unset"
+          env | grep -E '^TERM=' || echo "env: no TERM"
+          sh -c 'echo "sh -c TERM=[${TERM-<unset>}]"; printenv TERM || echo "sh printenv TERM: unset"'
+          bash -c 'echo "bash -c TERM=[${TERM-<unset>}]"; printenv TERM || echo "bash printenv TERM: unset"'
+          echo "--- /proc/self/environ"
+          tr '\0' '\n' < /proc/self/environ | grep -E '^TERM=' || echo "self environ: no TERM"
+          echo "--- the runner process env (step host)"
+          for p in $(pgrep -f 'Runner.Worker' 2>/dev/null); do
+            echo "pid $p:"; tr '\0' '\n' < "/proc/$p/environ" | grep -E '^TERM=' || echo "  no TERM"
+          done
+          echo "--- login shells"
+          printf 'sh -lc TERM=[%s]\n' "$(sh -lc 'printf %s "${TERM-<unset>}"')"
+          printf 'bash -lc TERM=[%s]\n' "$(bash -lc 'printf %s "${TERM-<unset>}"')"
+          echo "--- sudo"
+          sudo -n printenv TERM || echo "sudo printenv TERM: unset"
